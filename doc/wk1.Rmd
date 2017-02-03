@@ -1,0 +1,497 @@
+---
+title: "R Notebook"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+```{r,warning=FALSE, message=FALSE}
+# JAVA_HOME<- "C:/Software/JRE/JAVA/bin"
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(dplyr)
+library(tidytext)
+library(topicmodels)
+library(slam)
+library(igraph)
+library(rvest)
+library(tibble)
+library(qdap)
+library(sentimentr)
+library(gplots)
+library(syuzhet)
+library(factoextra)
+library(beeswarm)
+library(scales)
+library(RANN)
+library(tidyr)
+library(ggplot2)
+
+source("../lib/plotstacked.R")
+source("../lib/speechFuncs.R")
+
+# read data
+folder.path="../data/InauguralSpeeches/"
+speeches=list.files(path = folder.path, pattern = "*.txt")
+prez.out=substr(speeches, 6, nchar(speeches)-4)
+
+length.speeches=rep(NA, length(speeches))
+ff.all<-Corpus(DirSource(folder.path))
+
+ff.all<-tm_map(ff.all, stripWhitespace)
+ff.all<-tm_map(ff.all, content_transformer(tolower))
+ff.all<-tm_map(ff.all, removeWords, stopwords("english"))
+ff.all<-tm_map(ff.all, removeWords, character(0))
+ff.all<-tm_map(ff.all, removePunctuation)
+tdm.all<-TermDocumentMatrix(ff.all)
+tdm.tidy=tidy(tdm.all)
+tdm.overall=summarise(group_by(tdm.tidy, term), sum(count))
+
+dtm <- DocumentTermMatrix(ff.all, 
+                          control = list(weighting =
+                                           function(x)
+                                             weightTfIdf(x, normalize =
+                                                           FALSE),
+                                         stopwords = TRUE))
+ff.dtm=tidy(dtm)
+```
+
+# Part 1
+I am interested in the quality of speeches of each president because it may somehow reflect the person's writing ability, speaking ability and intelligence quotient. Thus, we evaluate the quality of their speech from several aspects including number of advanced vocabulary used, the number of long sentences, the average number of words in a sentence. Since inaugural speeches are more formal, we only concentrate on inaugural speeches in the following study.
+
+## 1. GRE is a required test to become a master student, thus GRE vocabulary is not so verbal and it would be hard to memorize the speech if it contains many GRE words. The more words in the speech, the harder for the president to remember and it could indicates the higher ability the president has.
+
+```{r,warning=FALSE, message=FALSE}
+# get GRE vocabulary list
+d<- read.table("../data/gre.txt", header = T) 
+d<- unlist(d)
+d<- as.character(d)
+
+# create the document term matrix based on GRE vocabulary
+dtm2<- DocumentTermMatrix(ff.all,list(dictionary=d))
+ff.dtm2<-tidy(dtm2)
+
+# choose a wordcloud randomly
+i<- sample(length(speeches),size = 1)
+  wordcloud(ff.dtm2$term[ff.dtm2$document==speeches[i]],
+            ff.dtm2$count[ff.dtm2$document==speeches[i]],
+              scale=c(5,0.5),
+              max.words=200,
+              min.freq=1,
+              random.order=FALSE,
+              rot.per=0,
+              use.r.layout=FALSE,
+              random.color=FALSE,
+              colors=brewer.pal(8,"PuRd"), 
+            main=prez.out[i])
+```
+
+```{r, echo=FALSE, results='hide',warning=FALSE}
+# save the wordcloud images
+for(i in 1:length(speeches)){
+  png(paste("../output/", prez.out[i],"gre.png", sep=""),
+      width=300, height=300)
+  wordcloud(ff.dtm2$term[ff.dtm2$document==speeches[i]],
+            ff.dtm2$count[ff.dtm2$document==speeches[i]],
+              scale=c(5,0.5),
+              max.words=200,
+              min.freq=1,
+              random.order=FALSE,
+              rot.per=0,
+              use.r.layout=FALSE,
+              random.color=FALSE,
+              colors=brewer.pal(9,"PuRd"), 
+            main=prez.out[i])
+  dev.off()
+}
+```
+
+```{r, warning=FALSE, message=FALSE}
+# calculate the sum of GRE words in each inaugural speech
+count<- tapply(ff.dtm2$count, ff.dtm2$document ,sum)  
+
+shorten<- function(rn) {
+  new_rn<- substr(rn, start=6, stop=nchar(rn)-6)
+  return(new_rn)
+}
+new_rn <- sapply(speeches,shorten)
+
+# some presidents made more than one inaugural speech, thus, calculate the average words
+count_mean<- tapply(count, new_rn, mean) 
+
+GREwords<- data.frame(presidentnames= names(count_mean),GREword= count_mean, rank=rank(count_mean, ties.method = "min"))
+```
+
+#### who are the top 5?
+```{r}
+GREwords[order(GREwords$GREword, decreasing = T),][1:5,]
+```
+
+#### who are the last 5?
+```{r}
+GREwords[order(GREwords$GREword),][1:5,]
+```
+
+## 2. In addition, the number of long sentences in a speech can also indicate the intellectual level of a person. But how long is "a long sentence"? First, we should calculate the number of words in every sentence.
+```{r, message=FALSE, warning=FALSE, results = 'hide',echo=FALSE}
+# read data
+
+### Inauguaral speeches
+main.page <- read_html(x = "http://www.presidency.ucsb.edu/inaugurals.php")
+# Get link URLs
+# f.speechlinks is a function for extracting links from the list of speeches. 
+inaug=f.speechlinks(main.page)
+#head(inaug)
+as.Date(inaug[,1], format="%B %e, %Y")
+inaug=inaug[-nrow(inaug),] # remove the last line, irrelevant due to error.
+
+#### Nomination speeches
+main.page=read_html("http://www.presidency.ucsb.edu/nomination.php")
+# Get link URLs
+nomin <- f.speechlinks(main.page)
+#head(nomin)
+#
+#### Farewell speeches
+main.page=read_html("http://www.presidency.ucsb.edu/farewell_addresses.php")
+# Get link URLs
+farewell <- f.speechlinks(main.page)
+#head(farewell)
+
+inaug.list=read.csv("../data/inauglist.csv", stringsAsFactors = FALSE)
+nomin.list=read.csv("../data/nominlist.csv", stringsAsFactors = FALSE)
+farewell.list=read.csv("../data/farewelllist.csv", stringsAsFactors = FALSE)
+
+speech.list=rbind(inaug.list, nomin.list, farewell.list)
+speech.list$type=c(rep("inaug", nrow(inaug.list)),
+                   rep("nomin", nrow(nomin.list)),
+                   rep("farewell", nrow(farewell.list)))
+speech.url=rbind(inaug, nomin, farewell)
+speech.list=cbind(speech.list, speech.url)
+
+# Loop over each row in speech.list
+speech.list$fulltext=NA
+for(i in seq(nrow(speech.list))) {
+  text <- read_html(speech.list$urls[i]) %>% # load the page
+    html_nodes(".displaytext") %>% # isloate the text
+    html_text() # get the text
+  speech.list$fulltext[i]=text
+  # Create the file name
+  filename <- paste0("../data/fulltext/", 
+                     speech.list$type[i],
+                     speech.list$File[i], "-", 
+                     speech.list$Term[i], ".txt")
+  sink(file = filename) %>% # open file to write 
+  cat(text)  # write the file
+  sink() # close the file
+}
+
+speech1=paste(readLines("../data/fulltext/SpeechDonaldTrump-NA.txt", 
+                  n=-1, skipNul=TRUE),
+              collapse=" ")
+speech2=paste(readLines("../data/fulltext/SpeechDonaldTrump-NA2.txt", 
+                  n=-1, skipNul=TRUE),
+              collapse=" ")
+speech3=paste(readLines("../data/fulltext/PressDonaldTrump-NA.txt", 
+                  n=-1, skipNul=TRUE),
+              collapse=" ")
+
+Trump.speeches=data.frame(
+  President=rep("Donald J. Trump", 3),
+  File=rep("DonaldJTrump", 3),
+  Term=rep(0, 3),
+  Party=rep("Republican", 3),
+  Date=c("August 31, 2016", "September 7, 2016", "January 11, 2017"),
+  Words=c(word_count(speech1), word_count(speech2), word_count(speech3)),
+  Win=rep("yes", 3),
+  type=rep("speeches", 3),
+  links=rep(NA, 3),
+  urls=rep(NA, 3),
+  fulltext=c(speech1, speech2, speech3)
+)
+
+names(speech.list) <- names(Trump.speeches)
+speech.list <- rbind(speech.list, Trump.speeches)
+```
+
+#### Then calculate the number of words in each sentence.
+```{r, message=FALSE, warning=FALSE}
+sentence.list=NULL
+for(i in 1:nrow(speech.list)){
+  sentences=sent_detect(speech.list$fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list=rbind(sentence.list, 
+                        cbind(speech.list[i,-ncol(speech.list)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+```
+
+#### Some non-sentences exist in raw data due to erroneous extra end-of sentence marks. 
+```{r}
+sentence.list=
+  sentence.list%>%
+  filter(!is.na(word.count)) 
+```
+
+#### First term
+```{r, fig.width = 5, fig.height = 7}
+
+par(mar=c(4, 11, 2, 2))
+
+sentence.list.sel=filter(sentence.list, type=="inaug", Term==1)
+sentence.list.sel$File=factor(sentence.list.sel$File)
+sentence.list.sel$FileOrdered=reorder(sentence.list.sel$File, 
+                                  sentence.list.sel$word.count, 
+                                  mean, 
+                                  order=T)
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list.sel,
+         horizontal = TRUE, 
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.sel$FileOrdered),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Inaugural speeches")
+
+```
+
+#### Second term
+```{r, fig.width = 5, fig.height = 5}
+
+par(mar=c(4, 11, 2, 2))
+
+#sel.comparison=levels(sentence.list$FileOrdered)
+sentence.list.sel=filter(sentence.list, type=="inaug", Term==2)
+sentence.list.sel$File=factor(sentence.list.sel$File)
+sentence.list.sel$FileOrdered=reorder(sentence.list.sel$File, 
+                                  sentence.list.sel$word.count, 
+                                  mean, 
+                                  order=T)
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list.sel,
+         horizontal = TRUE, 
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.sel$FileOrdered),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Inaugural speeches")
+
+```
+
+#### We can see from the plot that number of words in a sentence are mostly less than 60, thus we regard the sentence has more than 60 words as a long sentence, and calculate the number of long sentences in a speech.
+```{r}
+presidentnames<- names(count_mean)
+long_sentence<-data.frame(presidentnames, "number"=Inf)
+
+for (i in 1:length(presidentnames)) {
+  a<- sentence.list%>%
+        filter(File==presidentnames[i], 
+             type=="inaug",
+             Term==1,
+             word.count>=60)%>%
+      select(sentences)
+  long_sentence[i,2]<- nrow(a)
+}
+
+long_sentence$rank2<- rank(long_sentence$number, ties.method = "min")
+# Let's see the top 5 president
+long_sentence[order(long_sentence$number,decreasing = T),][1:5,]
+# And the last 5
+long_sentence[order(long_sentence$number),][1:5,]
+```
+
+## 3. Moreover, the average and deviation of length of the sentences can also represent the level and stability of a person's "intelligence".
+```{r, warning=FALSE, fig.width = 12, fig.height = 8}
+sentence.list.sel=filter(sentence.list, type=="inaug")
+word_count_mean<- tapply(sentence.list.sel$word.count, sentence.list.sel$File, mean)
+word_count_sd<- tapply(sentence.list.sel$word.count,sentence.list.sel$File, sd)
+
+wordbind<- data.frame(word_count_mean,word_count_sd)
+
+g<- ggplot(data = wordbind) +
+    geom_point(mapping = aes(x=word_count_mean,y=word_count_sd)) +
+    geom_text(mapping = aes(word_count_mean+0.2, word_count_sd, label=rownames(wordbind)),cex=4)+
+    labs(x = "Average number of words in a sentence", y = "Sd of number of words in a sentence")
+g
+png("../output/wordcount.png",width=1500, height=800)
+  g
+  dev.off()
+```
+
+#### Thus, we get three seperate rank of the presidents based on different standard, then we combined these together and reach a final rank of the inaugural speeches.
+```{r}
+average_words<- data.frame(presidentnames=names(word_count_mean),words= word_count_mean, rank3=rank(word_count_mean, ties.method = "min"))
+
+total_rank<- merge(GREwords, long_sentence, merge="presidentnames")
+total_rank<- merge(total_rank, average_words)
+total_rank$finalrank <- rowMeans(cbind(total_rank$rank,total_rank$rank2,total_rank$rank3))
+
+total_rank<- total_rank[order(total_rank$finalrank,decreasing = T),]
+```
+
+#### who are the top 5?
+```{r}
+total_rank[1:5,]
+```
+
+#### who are the last 5?
+```{r}
+total_rank[36:40,]
+```
+
+
+## 4. In fact, I am very interested in Trump. Not surprisingly, from the plot above, his inaugural speech consists much less long sentences than other presidents. And the low standard deviation means that the number of words do not vary a lot (he may could only write short sentences, lol).
+## So, to get more information about Trump, let's take a look at three other speeches of Trump.
+```{r, fig.width = 5, fig.height = 4}
+sentence.list.trump=filter(sentence.list, President=="Donald J. Trump")
+sentence.list.trump<-sentence.list.trump[order(sentence.list.trump$Words),]
+sentence.list.trump$File=factor(sentence.list.trump$File)
+
+table(sentence.list.trump$Words,sentence.list.trump$type)
+sentence.list.trump$FileOrdered=rep(c("inaug","speech 1","nomin 1","speech 2","speech 3"),c(95,141,346,505,585))
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list.trump,
+         horizontal = TRUE,
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8, spacing=1/5,
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Trump speeches")
+
+# The plot shows Trump uses mostsly 3-20 words in a sentences. And I would like to know what the most number of words in a sentence Trump used.
+table(sentence.list.trump$word.count)
+
+# The table tells us the 6-word-sentence is the most, and what are these sentences?
+sentence.list.trump%>%
+    filter(word.count==6)%>%
+  select(sentences)%>%sample_n(10)
+
+# I would also like to know what is the longest sentences.
+sentence.list.trump%>%
+    filter(word.count==77)%>%
+  select(sentences)
+```
+
+#### Let's make a contrast to the long sentences in President George Washington's speeches.
+```{r}
+sentence.list%>%
+   filter(File=="GeorgeWashington",
+           word.count>=100)%>%
+   select(sentences)
+
+```
+
+#### and I also want to have a look at the long sentences in our champion, William Henry Harrison's speeches.
+```{r}
+sentence.list%>%
+    filter(File=="WilliamHenryHarrison",
+           word.count>=115)%>%
+  select(sentences)
+```
+
+# Part 2 cluster
+```{r}
+# choose suitable n, reduce the terms to about 50
+n<- 0.3
+dtm_cluster <- removeSparseTerms(dtm, n)
+dtm_cluster
+
+tdm_cluster <- as.TermDocumentMatrix(dtm_cluster)
+tdm_cluster <- weightTfIdf(tdm_cluster)
+```
+
+```{r, results = 'hide'}
+# convert the sparse term-document matrix to a standard data frame
+mydata_cluster <- as.data.frame(inspect(tdm_cluster))
+mydata_cluster <- scale(mydata_cluster)
+d <- dist(mydata_cluster, method = "euclidean") # distance matrix
+fit <- hclust(d, method="ward.D")
+```
+
+```{r,fig.width = 10, fig.height = 5}
+# display dendogram
+plot(fit)
+```
+
+```{r, results='hide'}
+# save the dendogram
+png(paste("../output/", "WordCluster.png", sep = ''),
+    width=10, height=10, 
+    units="in", res=700)
+plot(fit)  
+dev.off()
+```
+
+# Part 3 topic modeling
+```{r, warning=FALSE, message=FALSE}
+dtm_topic<- DocumentTermMatrix(ff.all)
+
+# set topic number=10  
+k = 10
+SEED <- 2003
+
+# use four different method to do topic modeling
+ff.all_TM2 <- list(
+  VEM = LDA(dtm_topic, k = k, control = list(seed = SEED)),
+  VEM_fixed = LDA(dtm_topic, k = k, control = list(estimate.alpha = FALSE, seed = SEED)),
+  Gibbs = LDA(dtm_topic, k = k, method = "Gibbs", 
+              control = list(seed = SEED, burnin = 1000, thin = 100, iter = 1000)),
+  CTM = CTM(dtm_topic, k = k, 
+            control = list(seed = SEED, var = list(tol = 10^-4), em = list(tol = 10^-3))) )
+
+termsForSave1<- terms(ff.all_TM2[["VEM"]], 10)
+termsForSave2<- terms(ff.all_TM2[["VEM_fixed"]], 10)
+termsForSave3<- terms(ff.all_TM2[["Gibbs"]], 10)
+termsForSave4<- terms(ff.all_TM2[["CTM"]], 10)
+
+x<-array(NA,dim = c(10,10,4))
+x[,,1]<-termsForSave1
+x[,,2]<-termsForSave2
+x[,,3]<-termsForSave3
+x[,,4]<-termsForSave4
+
+for (n in 1:4) {
+  tfs <- as.data.frame(x[, , n], stringsAsFactors = F)
+  adjacent_list <- lapply(1:10, function(i) embed(tfs[,i], 2)[, 2:1]) 
+  edgelist = as.data.frame(do.call(rbind, adjacent_list), stringsAsFactors =F)
+  g <-graph.data.frame(edgelist,directed=T )
+  l<-layout.fruchterman.reingold(g)
+  nodesize = centralization.degree(g)$res 
+  V(g)$size = log( centralization.degree(g)$res )
+
+  nodeLabel = V(g)$name
+  E(g)$color =  unlist(lapply(sample(colors()[26:137], 10), function(i) rep(i, 9))); unique(E(g)$color)
+
+  
+# display the topic network plot
+plot(g, vertex.label= nodeLabel,  edge.curved=TRUE, 
+     vertex.label.cex =0.5,  edge.arrow.size=0.2, layout=l )
+
+# save the plot
+ png(  paste("../output/topic_graph", n, ".png", sep=""),
+    width=5, height=5, 
+    units="in", res=700)
+
+  plot(g, vertex.label= nodeLabel,  edge.curved=TRUE, 
+     vertex.label.cex =0.5,  edge.arrow.size=0.2, layout=l )
+
+dev.off()
+}
+```
+
+#### From the plot, we can see that "government", "people", "freedom", "states" are the main topic in all inaugural speeches.
+
