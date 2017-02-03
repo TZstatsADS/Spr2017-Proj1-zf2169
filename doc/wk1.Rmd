@@ -6,7 +6,7 @@ output:
 ---
 
 ```{r,warning=FALSE, message=FALSE}
-# JAVA_HOME<- "C:/Software/JRE/JAVA/bin"
+JAVA_HOME<- "C:/Software/JRE/JAVA/bin"
 library(tm)
 library(wordcloud)
 library(RColorBrewer)
@@ -355,7 +355,7 @@ total_rank[36:40,]
 
 
 #### 4. In fact, I am very interested in Trump. Not surprisingly, from the plot above, his inaugural speech consists much less long sentences than other presidents. And the low standard deviation means that the number of words do not vary a lot (he may could only write short sentences, lol).
-## So, to get more information about Trump, let's take a look at three other speeches of Trump.
+#### So, to get more information about Trump, let's take a look at three other speeches of Trump.
 ```{r, fig.width = 5, fig.height = 4}
 sentence.list.trump=filter(sentence.list, President=="Donald J. Trump")
 sentence.list.trump<-sentence.list.trump[order(sentence.list.trump$Words),]
